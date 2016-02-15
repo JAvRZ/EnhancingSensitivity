@@ -1,0 +1,107 @@
+## Loading libraries ##
+library( MASS)
+library( nlme)
+
+for( iter in c(0,1,2,5,9) ){
+
+########################### Data simulation ###########################
+######## To be adjusted to workstation, and simulation stage ########## 
+number.of.deviationsiter <- iter # should be 0, 1, 2, 5, 9
+
+# determining the appropriate working directory where workspaces will be saved
+main.working.directory <- paste( "C:/Users/jagelin1/Documents/MMNC/FinalSims/patients", number.of.deviationsiter, "deviations", sep = "")
+setwd(main.working.directory)
+#######################################################################
+## Entering simulation parameters ##
+no.tests <- 10
+no.patients.total <- 1000
+no.patients.per.study <- rep( 1, no.patients.total)
+
+# generating random covariates age, sex and education level
+#    age is coded in whole years, sex is coded -1 = male, +1 = female, education is coded in 7 discrete levels (0-6, higher is better)
+#    a normal distribution is used for ages, and a beta distribution is used for education to introduce skewness
+age.per.patient <- round( rnorm( no.patients.total, 65, 15) )
+sex.per.patient <- sample( c(-1,1), no.patients.total, replace = T)
+edu.per.patient <- floor(rbeta( no.patients.total, 2, 3)*7)
+# repeats each covariate for every test for every patient to align patients and their covariates	
+age <- rep( age.per.patient, each = no.tests)
+sex <- rep( sex.per.patient, each = no.tests)
+edu <- rep( edu.per.patient, each = no.tests)
+
+# defining the within-study covariance structures for the tests (all variances are equal now over tests,
+#   and all covariances are equal between pairs of tests)
+# first, the correlation structure is defined, which is then multiplied by the variance
+cor.matrix.within <- diag( no.tests) # the diagonal of the 10 by 10 correlation matrix is defined as 1
+cor.matrix.within[lower.tri(cor.matrix.within)] <- cor.matrix.within[upper.tri(cor.matrix.within)] <- 0.4 # the off-diagonal, the correlation between tests, is defined as 0.4
+sd.within <- sqrt(25) # the within-study variance is defined as 25
+cov.matrix.within <- sd.within * cor.matrix.within * sd.within # the true covariance matrix is calculated by multiplying the correlation matrix by the variance
+
+# defining the between-study covariance structures for the tests (all variances are equal now over tests,
+#   and all covariances are equal and 0 between pairs of tests)
+# first, the correlation structure is defined, which is then multiplied by the variance
+cor.matrix.between <- diag( no.tests) # the diagonal of the 10 by 10 correlation matrix is defined as 1
+cor.matrix.between[lower.tri(cor.matrix.between)] <- cor.matrix.between[upper.tri(cor.matrix.between)] <- 0 # the off-diagonal, the correlation between tests, is defined as 0
+sd.between <- sqrt(5) # the between-study variance is defined as 5
+cov.matrix.between <- sd.between * cor.matrix.between * sd.between # the true covariance matrix is calculated by multiplying the correlation matrix by the variance
+
+# defining the fixed parameters for the tests (all are equal now over tests)
+mean.eff <- matrix( 20, 1, no.tests) # the grand means are defined as 20 for every test
+age.eff <- matrix( -0.125, 1, no.tests) # the influence of one extra year of age is defined as -0.125 for every test
+sex.eff <- matrix( 0.5, 1, no.tests) # the influence of sex ( * -1 for males, * 1 for females), compared to the mean, is defined as 0.5 for every test
+edu.eff <- matrix( 1.25, 1, no.tests) # the influence of one extra level of education is defined as 1.25 for every test
+# combining the fixed parameters in a single column vector
+fixed.eff <- matrix( c( mean.eff, age.eff, sex.eff, edu.eff), no.tests + no.tests * 3, 1 )
+
+# constructs fixed and random design matrices
+design.matrix.one.patient.one.effect <- diag( no.tests) # diagonal matrix of factor loadings for 1 patient
+design.matrix.one.effect <- rep( 1, no.patients.total ) %x% design.matrix.one.patient.one.effect # is also the design matrix for the fixed intercept
+design.matrix.random <- matrix( 0, no.tests * no.patients.total, no.tests * no.patients.total) # empty matrix to be filled with design matrix for random effects in for-loop
+# the for-loop places a 10x10 diagonal block for every patient in 10 columns that are reserved for the study the patient came from
+for( study.j in 1 : no.patients.total ){
+  design.matrix.random[ (sum( no.patients.per.study[(1:no.patients.total)<study.j])*no.tests+1) : ((no.tests * no.patients.per.study[study.j])+(sum( no.patients.per.study[(1:no.patients.total)<study.j])*no.tests)),
+    (study.j*no.tests-(no.tests-1)):(study.j*no.tests)]  <- rep( 1, no.patients.per.study[study.j] ) %x% design.matrix.one.patient.one.effect
+  }
+	
+# constructs the design matrix for all fixed effects
+design.matrix.fixed <- cbind( design.matrix.one.effect, design.matrix.one.effect * age, design.matrix.one.effect * sex, design.matrix.one.effect * edu)
+  
+# simulates random deviances at the first and third level from a multivariate normal distribution with means 0 and the covariance matrices defined above
+v <- matrix( t(mvrnorm( no.patients.total, rep( 0, no.tests), Sigma = cov.matrix.between)), no.tests * no.patients.total, 1)
+e <- matrix( t(mvrnorm( no.patients.total, rep( 0, no.tests), Sigma = cov.matrix.within)), no.tests*no.patients.total, 1)
+  
+# calculates the mean structure
+mean.structure <- design.matrix.fixed %*% fixed.eff
+# calculates the between-study and within-study errors
+between.study.error <- design.matrix.random %*% v
+within.study.error <- e
+  
+# generates outcomes
+testscore <- mean.structure + between.study.error + within.study.error
+
+# constructs the output dataframe
+#  variable names are added to the dummy coding and outcome variable
+colnames(design.matrix.one.effect) <- paste( "d", 1:no.tests, sep="")
+colnames(testscore) <- "testscore"
+#  repeats study numbers, ID numbers and test numbers to align these variables
+study <- rep( 10001:(10000+no.patients.total), times = no.patients.per.study * no.tests )
+ID <- rep( 10001:(10000+no.patients.total), each = no.tests)
+test.ID <- rep( 1:no.tests, times = no.patients.total)
+#  combines the data, and ensures its class as a dataframe
+patient.data <- cbind(ID, study, age, sex, edu, design.matrix.one.effect, test.ID, testscore)
+patient.data <- as.data.frame(patient.data)
+
+# subtracting scores on tests
+cov.matrix.between.plus.within <- cov.matrix.between + cov.matrix.within
+sds.per.test <- diag( sqrt( cov.matrix.between.plus.within) )
+two.sds.per.test <- matrix( sds.per.test * 2, no.patients.total*no.tests, 1) 
+which.tests.deviations <- matrix(replicate( no.patients.total, sample( c(rep( 1, number.of.deviationsiter),rep( 0, 10 - number.of.deviationsiter)), 10, replace = FALSE )), no.patients.total * no.tests, 1)
+differences <- two.sds.per.test * which.tests.deviations
+patient.data$testscore <- patient.data$testscore - differences
+
+########################### Saving the data and the model ###########################
+filename.wspace <- paste( "9feb", no.patients.total, "patients", number.of.deviationsiter, "deviations", 0, "missing.RData", sep = "") # defines the filename for the workspace to be saved
+save.image( filename.wspace) # saves the workspace
+rm( list = ls(all = TRUE) ) # removes all objects, to avoid mix-ups with objects from earlier and later simulations
+
+}
+
