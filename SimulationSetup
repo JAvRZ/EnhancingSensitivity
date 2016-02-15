@@ -1,0 +1,141 @@
+## Loading libraries ##
+library( MASS)
+library( nlme)
+
+########################### Data simulation ###########################
+######## To be adjusted to workstation, and simulation stage ########## 
+for( i in 1:1000){ # defines how many and which simulations will be run
+# Specifying the type of simulation: the percentage of missing tests, 
+#   and whether a model with or without between-study variance is fitted
+percentage.missing <- 0 # should be 0, 40 or 70
+type <- "lme" # should be "gls" or "lme"
+
+# determining the appropriate working directory where workspaces will be saved, and from where missing structures will be loaded
+main.working.directory <- paste( "C:/Users/jagelin1/Documents/MMNC/FinalSims/sims", type, percentage.missing, "missing", sep = "")
+missing.structure.working.directory <- "C:/Users/jagelin1/Documents/MMNC/MissingStructures"
+setwd(main.working.directory)
+#######################################################################
+## Entering simulation parameters ##
+no.tests <- 10
+no.studies <- 30
+no.participants.per.study <- rep(50, no.studies) # each study has 50 participants
+no.participants.total <- sum(no.participants.per.study)
+
+# generating random covariates age, sex and education level
+#    age is coded in whole years, sex is coded -1 = male, +1 = female, education is coded in 7 discrete levels (0-6, higher is better)
+#    a normal distribution is used for ages, and a beta distribution is used for education to introduce skewness
+age.per.participant <- round( rnorm( no.participants.total, 65, 15) )
+sex.per.participant <- sample( c(-1,1), no.participants.total, replace = T)
+edu.per.participant <- floor(rbeta( no.participants.total, 2, 3)*7)
+#    means are calculated to center the continuous covariates which is also done below,
+#      and means are saved because patient data needs to be adjusted to the same scale later
+mean.age.per.participant <- mean( age.per.participant )
+mean.edu.per.participant <- mean( edu.per.participant)
+centered.age.per.participant <- age.per.participant - mean.age.per.participant
+centered.edu.per.participant <- edu.per.participant - mean.edu.per.participant
+# repeats each covariate for every test for every participant to align participants and their covariates	
+age <- rep( centered.age.per.participant, each = no.tests)
+sex <- rep( sex.per.participant, each = no.tests)
+edu <- rep( centered.edu.per.participant, each = no.tests)
+
+# defining the within-study covariance structures for the tests (all variances are equal now over tests,
+#   and all covariances are equal between pairs of tests)
+# first, the correlation structure is defined, which is then multiplied by the variance
+cor.matrix.within <- diag( no.tests) # the diagonal of the 10 by 10 correlation matrix is defined as 1
+cor.matrix.within[lower.tri(cor.matrix.within)] <- cor.matrix.within[upper.tri(cor.matrix.within)] <- 0.4 # the off-diagonal, the correlation between tests, is defined as 0.4
+sd.within <- sqrt(25) # the within-study variance is defined as 25
+cov.matrix.within <- sd.within * cor.matrix.within * sd.within # the true covariance matrix is calculated by multiplying the correlation matrix by the variance
+
+# defining the between-study covariance structures for the tests (all variances are equal now over tests,
+#   and all covariances are equal and 0 between pairs of tests)
+# first, the correlation structure is defined, which is then multiplied by the variance
+cor.matrix.between <- diag( no.tests) # the diagonal of the 10 by 10 correlation matrix is defined as 1
+cor.matrix.between[lower.tri(cor.matrix.between)] <- cor.matrix.between[upper.tri(cor.matrix.between)] <- 0 # the off-diagonal, the correlation between tests, is defined as 0
+sd.between <- sqrt(5) # the between-study variance is defined as 5
+cov.matrix.between <- sd.between * cor.matrix.between * sd.between # the true covariance matrix is calculated by multiplying the correlation matrix by the variance
+
+# defining the fixed parameters for the tests (all are equal now over tests)
+mean.eff <- matrix( 20, 1, no.tests) # the grand means are defined as 20 for every test
+age.eff <- matrix( -0.125, 1, no.tests) # the influence of one extra year of age is defined as -0.125 for every test
+sex.eff <- matrix( 0.5, 1, no.tests) # the influence of sex ( * -1 for males, * 1 for females), compared to the mean, is defined as 0.5 for every test
+edu.eff <- matrix( 1.25, 1, no.tests) # the influence of one extra level of education is defined as 1.25 for every test
+# combining the fixed parameters in a single column vector
+fixed.eff <- matrix( c( mean.eff, age.eff, sex.eff, edu.eff), no.tests + no.tests * 3, 1 )
+
+# constructs fixed and random design matrices
+design.matrix.one.participant.one.effect <- diag( no.tests) # diagonal matrix of factor loadings for 1 participant
+design.matrix.one.effect <- rep( 1, no.participants.total ) %x% design.matrix.one.participant.one.effect # is also the design matrix for the fixed intercept
+design.matrix.random <- matrix( 0, no.tests * no.participants.total, no.tests * no.studies) # empty matrix to be filled with design matrix for random effects in for-loop
+# the for-loop places a 10x10 diagonal block for every participant in 10 columns that are reserved for the study the participant came from
+for( study.j in 1 : no.studies ){
+  design.matrix.random[ (sum( no.participants.per.study[(1:no.studies)<study.j])*no.tests+1) : ((no.tests * no.participants.per.study[study.j])+(sum( no.participants.per.study[(1:no.studies)<study.j])*no.tests)),
+    (study.j*no.tests-(no.tests-1)):(study.j*no.tests)]  <- rep( 1, no.participants.per.study[study.j] ) %x% design.matrix.one.participant.one.effect
+  }
+	
+# constructs the design matrix for all fixed effects
+design.matrix.fixed <- cbind( design.matrix.one.effect, design.matrix.one.effect * age, design.matrix.one.effect * sex, design.matrix.one.effect * edu)
+  
+# simulates random deviances at the first and third level from a multivariate normal distribution with means 0 and the covariance matrices defined above
+v <- matrix( t(mvrnorm( no.studies, rep( 0, no.tests), Sigma = cov.matrix.between)), no.tests * no.studies, 1)
+e <- matrix( t(mvrnorm( no.participants.total, rep( 0, no.tests), Sigma = cov.matrix.within)), no.tests*no.participants.total, 1)
+  
+# calculates the mean structure
+mean.structure <- design.matrix.fixed %*% fixed.eff
+# calculates the between- and within-study errors
+between.study.error <- design.matrix.random %*% v
+within.study.error <- e
+  
+# generates outcomes
+testscore <- mean.structure + between.study.error + within.study.error
+
+# constructs the output dataframe
+#  variable names are added to the dummy coding and outcome variable
+colnames(design.matrix.one.effect) <- paste( "d", 1:no.tests, sep="")
+colnames(testscore) <- "testscore"
+#  repeats study numbers, ID numbers and test numbers to align these variables
+study <- rep( 1:no.studies, times = no.participants.per.study * no.tests )
+ID <- rep( 1:no.participants.total, each = no.tests)
+test.ID <- rep( 1:no.tests, times = no.participants.total)
+#  combines the data, and ensures its class as a dataframe
+my.data <- cbind(ID, study, age, sex, edu, design.matrix.one.effect, test.ID, testscore)
+my.data <- as.data.frame(my.data)
+
+# introduces missingness if needed
+if ( percentage.missing == 40 | percentage.missing == 70 ){ # evaluates whether missingness is wanted and corresponds to one of the predefined amounts
+setwd(missing.structure.working.directory) # temporarily changes the working directory to the location of missingness pattern files
+missing.structure.filename <- paste("missingstructure", percentage.missing, ".txt", sep = "") # determines which missingness pattern file is needed
+missing.structure <- matrix( as.matrix(read.table( missing.structure.filename)), no.studies, no.tests*no.participants.per.study, byrow = F)
+missing.vals <- matrix(t(missing.structure),ncol = 1,byrow=T) # transform the missingness pattern into a single column of the same length as the test scores
+my.data.safe <- my.data # keeps original complete data available
+my.data$testscore <- my.data$testscore * missing.vals # multiplies the testscores by the missing value column, thus introducing NA's
+setwd(main.working.directory) # the path to the proper working directory is restored
+}
+
+########################### Fitting the model ###########################
+fixed.formula <- as.formula( "testscore ~ -1 + d1 + d2 + d3 + d4 + d5 + d6 + d7 + d8 + d9 + d10 + 
+    d1:age + d2:age + d3:age + d4:age + d5:age + d6:age + d7:age + d8:age + d9:age + d10:age +
+	d1:sex + d2:sex + d3:sex + d4:sex + d5:sex + d6:sex + d7:sex + d8:sex + d9:sex + d10:sex + 
+	d1:edu + d2:edu + d3:edu + d4:edu + d5:edu + d6:edu + d7:edu + d8:edu + d9:edu + d10:edu" )
+
+print( paste( type, " ", percentage.missing, " missing, iteration = ", i, sep = "" ) ) # prints the current type of simulation and i as a progress report
+
+# if type == "gls", a model is fitted with 10 test intercepts, 30 test-covariate interaction effects and an unconstrained 10x10 within-study covariance matrix
+if ( type == "gls"){
+model <- try( gls( fixed.formula, correlation=corSymm(form = ~ test.ID | study/ID), 
+weights = varIdent( form =~ 1 | test.ID), 
+method = "REML", data = my.data, na.action = na.omit,control = lmeControl(maxIter = 500, msMaxIter = 500, msMaxEval = 500, niterEM = 500 )))
+}
+# if type == "lme", a model is fitted with 10 test intercepts, 30 test-covariate interaction effects, a diagonal 10x10 between-study covariance matrix
+# and an unconstrained 10x10 within-study covariance matrix
+if ( type == "lme"){
+model <- try( lme( fixed.formula, correlation = corSymm(form = ~ test.ID | study/ID), 
+weights = varIdent( form =~ 1 | test.ID), random = list(study = pdDiag(~ -1 + d1 + d2 + d3 + d4 + d5 + d6 + d7 + d8 + d9 + d10 )),
+method = "REML", data = my.data, na.action = na.omit, control = lmeControl(maxIter = 500, msMaxIter = 500, msMaxEval = 500, niterEM = 500 )))
+}
+
+########################### Saving the data and the model ###########################
+filename.wspace <- paste( type, percentage.missing, "missing", i, ".RData", sep = "") # defines the filename for the workspace to be saved
+save.image( filename.wspace) # saves the workspace
+rm( list = ls(all = TRUE) ) # removes all objects, to avoid mix-ups with objects from earlier and later simulations
+}
+
