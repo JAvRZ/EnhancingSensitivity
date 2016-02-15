@@ -1,0 +1,81 @@
+
+extract.est.cov.matrix.within <- function( my.model, no.tests){
+#est.std.matrix.within <- my.model$sigma*as.numeric(c(1,coef(my.model$modelStruct$varStruct,unconstrained=FALSE)))
+
+
+firstnum <- which(is.na(match(1:10, sort(as.numeric(names(coef(my.model$modelStruct$varStruct,unconstrained = FALSE)))))))
+
+#firstnum <- which.min(2:10 - sort(as.numeric(names(coef(my.model$modelStruct$varStruct,unconstrained = FALSE)))))
+step1 <- rbind(as.numeric(c(1,coef(my.model$modelStruct$varStruct,unconstrained=FALSE))),as.numeric(c(firstnum, names(coef(my.model$modelStruct$varStruct,unconstrained = FALSE)))))
+
+est.std.matrix.within <- my.model$sigma*step1[,order(step1[2,])][1,]
+
+est.cor.matrix.within <- matrix( , no.tests, no.tests)
+est.cor.matrix.within[lower.tri(est.cor.matrix.within)] <- coef(my.model$modelStruct$corStruct, unconstrained = FALSE)
+est.cor.matrix.within <- t(est.cor.matrix.within)
+est.cor.matrix.within[lower.tri(est.cor.matrix.within)] <- coef(my.model$modelStruct$corStruct, unconstrained = FALSE)
+diag(est.cor.matrix.within) <- 1
+est.cov.matrix.within <- diag(est.std.matrix.within) %*% est.cor.matrix.within %*% diag(est.std.matrix.within)
+return(est.cov.matrix.within)
+}
+
+library(nlme)
+add.iterIUP = 1000
+for( IUP in c( 0) ){
+
+
+number.of.deviationsIUP <- IUP
+percentage.missingIUP <- 70
+augusttype <- "lme"
+
+patients.working.directory <- paste( "C:/Users/jagelin1/Documents/MMNC/FinalSims/patients", number.of.deviationsIUP, "deviations", sep = "")
+filename.wspace.patients <- paste( "9may", 1000, "patients", number.of.deviationsIUP, "deviations", percentage.missingIUP, "missing.RData", sep = "")
+setwd(patients.working.directory)
+load(filename.wspace.patients)
+patient.data.for.analysis <- patient.data
+
+norm.working.directory <- paste( "C:/Users/jagelin1/Documents/MMNC/FinalSims/sims", augusttype, percentage.missingIUP, "missing", sep = "")
+
+results.matrix <- matrix( ,1000,2)
+for( E in 1:1000){
+select.study <- add.iterIUP + E
+#print(E)
+filename.wspace.norm <- paste( augusttype, percentage.missingIUP, "missing", select.study, ".RData", sep = "")
+setwd(norm.working.directory)
+
+load(filename.wspace.norm)
+#print(filename.wspace.norm)
+
+est.n <- no.participants.total
+g <- ( est.n + 1 ) / est.n
+obs.x <- patient.data.for.analysis$testscore[patient.data.for.analysis$ID == 10000 + E,]
+p <- nrow(patient.data.for.analysis[patient.data.for.analysis$ID == 10000 + E,])
+
+
+if( augusttype == "lme"){
+est.cov.matrix.between <- as.numeric(VarCorr(model)[1:no.tests,1])*diag(no.tests)
+est.cov.matrix.within <- extract.est.cov.matrix.within(model,no.tests)
+C <- est.cov.matrix.within + est.cov.matrix.between
+degrees.of.freedom <- model$fixDF$X[1]
+}
+
+if( augusttype == "gls"){
+est.cov.matrix.within <- extract.est.cov.matrix.within(model,no.tests)
+C <- est.cov.matrix.within
+degrees.of.freedom <- model$dims$N - model$dims$p
+}
+
+inv.C <- solve(C)
+pred.y <- predict(model, patient.data.for.analysis[patient.data.for.analysis$ID == 10000+E,], level = 0) #pas op dat level niet naar een studie in verwijst die in normgroep zit!
+
+results.matrix[ E, 1] <- Tsquared <- ( 1 / g ) * ( ( est.n - p ) / ( ( est.n - 1 ) * p ) ) * t( pred.y - obs.x ) %*% inv.C %*% ( pred.y - obs.x )
+if( sum(pred.y - obs.x) > 0 ){
+results.matrix[ E, 2] <- 1 - pf( Tsquared, p, degrees.of.freedom )
+}else{ results.matrix[ E, 2] <- 1
+}
+}
+add.iterIUP <- add.iterIUP + 1000
+
+print(sum(results.matrix[,2]<0.1) / nrow(results.matrix))
+}
+
