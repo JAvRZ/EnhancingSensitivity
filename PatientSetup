@@ -20,9 +20,9 @@ no.patients.per.study <- rep( 1, no.patients.total)
 # generating random covariates age, sex and education level
 #    age is coded in whole years, sex is coded -1 = male, +1 = female, education is coded in 7 discrete levels (0-6, higher is better)
 #    a normal distribution is used for ages, and a beta distribution is used for education to introduce skewness
-age.per.patient <- round( rnorm( no.patients.total, 65, 15) )
+age.per.patient <- round( rnorm( no.patients.total, 65, 15) ) - 65
 sex.per.patient <- sample( c(-1,1), no.patients.total, replace = T)
-edu.per.patient <- floor(rbeta( no.patients.total, 2, 3)*7)
+edu.per.patient <- floor(rbeta( no.patients.total, 2, 3)*7) - 2.3
 # repeats each covariate for every test for every patient to align patients and their covariates	
 age <- rep( age.per.patient, each = no.tests)
 sex <- rep( sex.per.patient, each = no.tests)
